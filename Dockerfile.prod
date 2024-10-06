@@ -1,0 +1,54 @@
+# STEP_1 Dependencies
+FROM node:21-alpine3.19 as deps
+
+WORKDIR /usr/src/app
+
+COPY package*.json ./
+
+RUN npm install
+
+
+# STEP_2 Builder: build the app
+FROM node:21-alpine3.19 as build
+
+# aguments passed from docker-compose as variable under construction
+ARG ORDERS_DATABASE_URL
+ENV DATABASE_URL=$ORDERS_DATABASE_URL
+
+WORKDIR /usr/src/app
+
+# copy from deps the node_modules
+# cOPY --from=deps origin destination
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+
+# copy all source code of the application excluding files from .dockerignore
+COPY . .
+
+RUN npx prisma migrate deploy
+# Generate the prisma client and store them in the node_modules
+RUN npx prisma generate
+
+# is a good practice to run the testing before npm run build
+# RUN npm run test
+RUN npm run build
+
+# onle left production dependencies (build a lighter docker image)
+RUN npm ci -f --only=production && npm cache clean --force
+
+# STEP_3 Build the final  docker image
+FROM node:21-alpine3.19 as prod
+
+WORKDIR /usr/src/app
+
+COPY --from=build /usr/src/app/node_modules ./node_modules
+
+# copy only the DIST folder
+COPY --from=build /usr/src/app/dist ./dist
+
+ENV NODE_ENV=production
+
+USER node
+
+EXPOSE 3000
+
+CMD [ "node", "dist/main.js" ]
